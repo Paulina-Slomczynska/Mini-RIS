@@ -1,0 +1,972 @@
+import psycopg2
+import os
+from dotenv import load_dotenv
+from datetime import date
+import matplotlib.pyplot as plt
+
+def polaczenie():
+    load_dotenv()
+
+    DB_PARAMS= {
+        "dbname": os.getenv('DB_NAME'),
+        "user": os.getenv('DB_USER'),
+        "password": os.getenv('DB_PASSWORD'),
+        "host": os.getenv('DB_HOST'),
+        "port": os.getenv('DB_PORT')
+    }
+
+    try:
+        with psycopg2.connect(**DB_PARAMS) as conn:
+            with conn.cursor() as cursor:
+                cursor.execute('SELECT VERSION();')
+                db_version = cursor.fetchone()
+                print(f'Połączono z bazą wersja {db_version}.')
+                return conn
+
+    except Exception as e:
+        print(f'Wystapił błąd podczas łączenia z bazą danych: {e}.')
+
+def wyszukanie_pacjenta(conn):
+    while True:
+        imie_pac = input("Imię pacjenta: ").strip().lower()
+        nazwisko_pac = input("Nazwisko pacjenta: ").strip().lower()
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT * FROM public.pacjenci WHERE imie = %s AND nazwisko = %s;",(imie_pac,nazwisko_pac))
+            pacjent = cursor.fetchone()
+            if not pacjent:
+                print("Nie znaleziono pacjenta w bazie.")
+                continue
+            print(f"Znaleziono pacjent: {pacjent[1].capitalize()} {pacjent[2].capitalize()}, PESEL: {pacjent[3]}")
+            potw = input("Potwierdź wybranie pacjenta (tak/nie): ").strip().lower()
+            if potw=='tak' or potw=='t':
+                id_p = pacjent[0]
+                return id_p, imie_pac, nazwisko_pac
+            elif potw=='nie' or potw=='n':
+                dalej = input("Czy chcesz wybrać innego pacjenta (tak/nie): ").strip().lower()
+                if dalej=='tak' or dalej=='t':
+                    continue
+                else:
+                    print("Powrót do menu głównego.")
+                    return None, None, None
+            else:
+                print("Błąd wprowadzania. Niezana komenda.")
+                continue
+
+def wyszukanie_pacjenta_zaawansowane(conn):
+    id_p,imie_p,nazwisko_p = wyszukanie_pacjenta(conn)
+    if id_p==None:
+        return
+    
+    with conn.cursor() as cursor:
+        cursor.execute("""SELECT s.id_skierowania, s.id_pacjenta, s.id_lekarza, l.imie, l.nazwisko, l.specjalizacja, s.nazwa_badania, s.lokalizacja, s.data_skierowania, s.status, s.wstepne_rozpoznanie
+FROM public.skierowania AS s
+LEFT JOIN public.lekarze AS l ON s.id_lekarza = l.id_lekarza
+WHERE id_pacjenta=%s""",(id_p,))
+        skierowania = cursor.fetchall()
+    print(f"Skierowania pacjenta {imie_p.capitalize()} {nazwisko_p.capitalize()}:")
+    for skr in skierowania:
+        print(f"""\nID {skr[0]}: {skr[6].upper()} {skr[7]}
+Lekarz kierujący: {skr[3].capitalize()} {skr[4].capitalize()}, {skr[5]}
+Data wystawienia skierowania: {skr[8]}
+Wstępne rozpoznanie: {skr[10]}
+Status: {skr[9]}""")
+    
+    with conn.cursor() as cursor:
+        cursor.execute("""SELECT b.id_skierowania, s.id_pacjenta, s.nazwa_badania, s.lokalizacja, b.data_badania, b.id_radiologa, l.imie, l.nazwisko, b.opis
+FROM public.badania AS b
+LEFT JOIN public.skierowania AS s ON b.id_skierowania=s.id_skierowania
+LEFT JOIN public.lekarze AS l ON b.id_radiologa=l.id_lekarza
+WHERE s.id_pacjenta=%s""",(id_p,))
+        badania = cursor.fetchall()
+    print(f"\nBadanie pacjenta {imie_p.capitalize()} {nazwisko_p.capitalize()}:")
+    for bad in badania:
+        print(f"""{bad[2].upper()} {bad[3]}
+Data wykonania badania: {bad[4]}
+Opis: {bad[8]}
+Opisał: {bad[6].capitalize()} {bad[7].capitalize()}""")
+
+def wyszukanie_lekarza(conn):
+    while True:
+        imie_lek = input("\nImię lekarza: ").strip().lower()
+        nazwisko_lek = input("Nazwisko lekarza: ").strip().lower()
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT * FROM public.lekarze WHERE imie = %s AND nazwisko = %s;",(imie_lek,nazwisko_lek))
+            lekarz = cursor.fetchone()
+            if not lekarz:
+                print("Nie znaleziono lekarza w bazie.")
+                continue
+            print(f"Znaleziono lekarz: {lekarz[1].capitalize()} {lekarz[2].capitalize()}, {lekarz[3]}")
+            potw = input("Potwierdź wybranie lekarza (tak/nie): ").strip().lower()
+            if potw=='tak' or potw=='t':
+                id_l = lekarz[0]
+                return id_l, imie_lek, nazwisko_lek
+            elif potw=='nie' or potw=='n':
+                dalej = input("Czy chcesz wybrać innego lekarza (tak/nie): ").strip().lower()
+                if dalej=='tak' or dalej=='t':
+                    continue
+                else:
+                    print("Powrót do menu głównego.")
+                    return None, None, None
+            else:
+                print("Błąd wprowadzania. Niezana komenda.")
+                continue
+
+def dodanie_pacjenta(conn):
+    print("\nWPROWADZANIE NOWEGO PACJENTA")
+    imie = input("Imię: ")
+    imie = imie.lower().strip()
+    nazwisko = input("Nazwisko: ")
+    nazwisko = nazwisko.lower().strip()
+    while True:
+        pesel = input("PESEL: ").strip()
+        if len(pesel)==11 and pesel.isdigit()==True:
+            break
+        else:
+            print("Nieprawidłowy PESEL.")
+    if pesel[2]>='2':
+        rok = '20'+pesel[0]+pesel[1]
+        rok = int(rok)
+        miesiac = int(pesel[2]+pesel[3]) - 20
+        dzien = int(pesel[4]+pesel[5])
+    else:
+        rok = int('19' + pesel[0] +pesel[1])
+        miesiac = int(pesel[2]+pesel[3])
+        dzien = int(pesel[4]+pesel[5])
+    data_urodzenia = date(rok,miesiac,dzien)
+    while True:
+        plec = input("Płeć: (K/M) ")
+        plec = plec.upper().strip()
+        if plec == 'K' or plec == 'M':
+            break
+        elif plec == 'F':
+            plec = 'K'
+            break
+        else:
+            print("Wprowadzono nieprawidłową płeć.")
+
+    with conn.cursor() as cursor:
+        cursor.execute("INSERT INTO public.pacjenci(imie, nazwisko, pesel, data_urodzenia, plec) VALUES (%s,%s,%s,%s,%s);",(imie,nazwisko,pesel,data_urodzenia,plec))
+        conn.commit()
+    print(f"Pacjent {imie.capitalize()} {nazwisko.capitalize()} został pomyślnie dodany do bazy.")
+
+def dodanie_lekarza(conn):
+    print("\nWprowadzanie nowego lekarza")
+    imie = input("Imię: ")
+    imie = imie.strip().lower()
+    nazwisko = input("Nazwisko: ")
+    nazwisko = nazwisko.strip().lower()
+    specjalizacja = input("Specjalizacja: ")
+    specjalizacja = specjalizacja.lower().strip()
+
+    with conn.cursor() as cursor:
+        cursor.execute("INSERT INTO public.lekarze(imie,nazwisko,specjalizacja) VALUES (%s,%s,%s);",(imie,nazwisko,specjalizacja))
+        conn.commit()
+    print(f"Pomyślnie dodano lekarza {imie.capitalize()} {nazwisko.capitalize()} do bazy.")
+
+def dodanie_skierowania(conn):
+    print("\nWPRPWADZANIE NOWEGO SKIEROWANIA")
+    id_p, imie_pac, nazwisko_pac = wyszukanie_pacjenta(conn)
+    if id_p==None:
+        return
+    id_l, imie_lek, nazwisko_lek = wyszukanie_lekarza(conn)
+    if id_l==None:
+        return
+    
+    nazwa_badania = input("Rodzaj badania (tk/rtg/mri/usg): ").lower().strip()
+    lokalizacja = input("Obszar badany: ").lower()
+    czy_dzis = input("Czy skierowanie ma zostać wystawione z dzisiejszą datą (tak/nie): ")
+    if czy_dzis=='tak' or czy_dzis=='t':
+        data_skierowania = date.today()
+    else:
+        while True:
+            try:
+                dzien = int(input("Dzień: "))
+                miesiac = int(input("Miesiąc (liczba): "))
+                rok = int(input("Rok: "))
+                data_skierowania = date(rok,miesiac,dzien)
+                if data_skierowania>date.today():
+                    print("Data z przyszłości. Proszę zacząć od początku.")
+                    continue
+                break
+            except:
+                print("Wystąpił błąd podczas wprowadznia daty skierowania. Proszę zacząć od początku.")
+                continue
+
+    wst_rozp = input("Wstępne rozpoznanie: ").lower()
+    status = "wystawione"
+
+    with conn.cursor() as cursor:
+        cursor.execute("""INSERT INTO public.skierowania(id_pacjenta,id_lekarza,nazwa_badania,lokalizacja,data_skierowania,wstepne_rozpoznanie,status) 
+        VALUES (%s,%s,%s,%s,%s,%s,%s);""",(id_p,id_l,nazwa_badania,lokalizacja,data_skierowania,wst_rozp,status))
+        conn.commit()
+    
+    print(f"""
+Do bazy dodano skierowanie:
+Pacjent: {imie_pac.capitalize()} {nazwisko_pac.capitalize()}
+Lekarz: {imie_lek.capitalize()} {nazwisko_lek.capitalize()}
+Badanie: {nazwa_badania} Okolica: {lokalizacja}
+Data skierowania: {data_skierowania}
+Wstępne rozpoznanie: {wst_rozp}
+Status: {status}""")
+
+def wyszukanie_skierowania(conn):
+    while True:
+        imie_pac = input("Imię pacjenta: ").strip().lower()
+        nazwisko_pac = input("Nazwisko pacjenta: ").strip().lower()
+        
+        with conn.cursor() as cursor:
+            cursor.execute("""SELECT * FROM public.skierowania AS s
+            JOIN public.pacjenci AS p ON s.id_pacjenta = p.id_pacjenta 
+            WHERE imie=%s AND nazwisko=%s 
+            ORDER BY s.data_skierowania DESC;""", (imie_pac,nazwisko_pac))
+            skierowania = cursor.fetchall()
+        if not skierowania:
+            print(f"Nie znaleziono skierowań dla pacjenta {imie_pac.capitalize()} {nazwisko_pac.capitalize()}.")
+            dalej = input("Czy chcesz wyszukać innego pacjenta (tak/nie): ")
+            if dalej=='tak' or dalej=='t':
+                continue
+            else:
+                print("Powrót do menu głównego.")
+                return None
+        print(f"\nSkierowania pacjenta {imie_pac.capitalize()} {nazwisko_pac.capitalize()}:")
+        ids=[]
+        for skr in skierowania:
+            ids.append(skr[0])
+            print(f"""ID: {skr[0]}
+{skr[3].upper()} {skr[7]} 
+Data wystawienia skierowania: {skr[4]}
+Wstępne rozpoznanie: {skr[5]}
+Status: {skr[6]}""")
+        return ids
+
+def dodanie_badania(conn):
+    print("\nWPROWADZANIE NOWEGO BADANIA")
+    ids = wyszukanie_skierowania(conn)
+    if ids == None:
+        return
+    
+    while True:
+        try:
+            id_wybrane = int(input("Wprowadź ID wybranego skierowania: "))
+            if id_wybrane not in ids:
+                print("Nie znaleziono skierowania o wprowadzonym ID.")
+                continue
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT status FROM public.skierowania WHERE id_skierowania=%s;",(id_wybrane,))
+                status = cursor.fetchone()[0]
+                if status=='zrealizowane':
+                    print("Wybrane skierowanie zostało juz zrealizowane.")
+                    nowe  = input("Czy chcesz wybrać inne (tak/nie): ")
+                    if nowe=='tak' or nowe=='t':
+                        continue
+                    elif nowe=='nie' or nowe=='n':
+                        print("Powrót do menu głównego.")
+                        return
+                    else:
+                        print("Błąd wprowadzania.")
+                        continue
+            break
+        except Exception as e:
+            print(f"Błąd wprowadzania: {e}")
+            continue
+    
+    czy_dzis = input("Czy zapisać badanie z dzisiejszą datą (tak/nie): ").lower().strip()
+    if czy_dzis=='tak' or czy_dzis=='t':
+        data_badania = date.today()
+    else:
+        while True:
+            try:
+                dzien = int(input("Dzień: "))
+                miesiac = int(input("Miesiąc (liczba): "))
+                rok = int(input("Rok: "))
+                data_badania = date(rok,miesiac,dzien)
+                if data_badania>date.today():
+                    print("Data z przyszłości. Proszę zacząć od początku.")
+                    continue
+                break
+            except:
+                print("Wystąpił błąd podczas wprowadznia daty badania. Proszę zacząć od początku.")
+                continue
+    print("Wybór lekarza radiologa opisujacego badanie.")
+    id_l, imie_l, nazwisko_l = wyszukanie_lekarza(conn)
+    opis = input("Proszę wpisać opis badania: ").lower()
+
+    zapytanie = "INSERT INTO public.badania(id_skierowania,data_badania,id_radiologa,opis) VALUES (%s,%s,%s,%s) RETURNING id_badania;"
+    with conn.cursor() as cursor:
+        cursor.execute(zapytanie,(id_wybrane,data_badania,id_l,opis))
+        id_badania = cursor.fetchone()[0]
+    zapytanie = "UPDATE public.skierowania SET status='zrealizowane' WHERE id_skierowania= %s RETURNING nazwa_badania;"
+    with conn.cursor() as cursor:
+        cursor.execute(zapytanie,(id_wybrane,))
+        rodzaj = cursor.fetchone()[0]
+    match rodzaj:
+        case 'tk':
+            while True:
+                try:
+                    dawka = float(input("Dawka promieniowania: "))
+                    break
+                except:
+                    print("Błąd wprowadzania.")
+                    continue
+            while True:
+                kontrast = input("Czy podczas badania podano środek kontrastowy (tak/nie): ").lower().strip()
+                if kontrast=='tak' or kontrast=='t':
+                    kontrast = True
+                    break
+                elif kontrast=='nie' or kontrast=='n':
+                    kontrast = False
+                    break
+                else:
+                    print("Nieznana komenda.")
+                    continue
+            while True:
+                tryb = input("Tryb badania (DECT/SECT): ").strip().lower()
+                if tryb=='dect' or tryb=='sect':
+                    break
+                else:
+                    print("Błąd wprowadzania.")
+                    continue
+
+            with conn.cursor() as cursor:
+                cursor.execute("INSERT INTO public.tk(id_badania,dawka_prom,kontrast,tryb) VALUES (%s,%s,%s,%s);",(id_badania,dawka,kontrast,tryb))
+                conn.commit()
+        case 'rtg':
+            while True:
+                try:
+                    dawka = float(input("Dawka promieniowania: "))
+                    break
+                except:
+                    print("Błąd wprowadzania.")
+                    continue
+            projekcja = input("Projekcja (AP,PA,LAT,SKOSNA): ").lower().strip()
+            pozycja = input("Pozycja: ").lower()
+            with conn.cursor() as cursor:
+                cursor.execute("INSERT INTO public.rtg(id_badania,dawka_prom,projekcja, pozycja) VALUES (%s,%s,%s,%s);",(id_badania,dawka,projekcja,pozycja))
+                conn.commit()
+        case 'mri':
+            while True:
+                try:
+                    pole = float(input("Pole magnetyczne aparatu: "))
+                    break
+                except:
+                    print("Błąd wprowadzania.")
+                    continue
+            while True:
+                kontrast = input("Czy podczas badania podano środek kontrastowy (tak/nie): ").lower().strip()
+                if kontrast=='tak' or kontrast=='t':
+                    kontrast = True
+                    break
+                elif kontrast=='nie' or kontrast=='n':
+                    kontrast = False
+                    break
+                else:
+                    print("Nieznana komenda.")
+                    continue
+            protokol = input("Protokół badania: ").lower()
+            with conn.cursor() as cursor:
+                cursor.execute("INSERT INTO public.mri(id_badania,pole_magn,kontrast,protokol) VALUES (%s,%s,%s,%s);",(id_badania,pole,kontrast,protokol))
+                conn.commit()
+        case 'usg':
+            glowica = input("Głowica uzyta podczas badania: ").lower()
+            while True:
+                doppler = input("Czy badano przepływy (tak/nie): ").lower().strip()
+                if doppler=='tak' or doppler=='t':
+                    doppler=True
+                    break
+                elif doppler=='nie' or doppler=='n':
+                    doppler=False
+                    break
+                else:
+                    print("Błąd wprowadzania.")
+                    continue
+            while True:
+                try:
+                    czestotliwosc = float(input("Częstotliwość obrazowania: "))
+                    break
+                except:
+                    print("Błąd wprowadzania.")
+                    continue
+            with conn.cursor() as cursor:
+                cursor.execute("INSERT INTO public.usg(id_badania,glowica,doppler,czestotliwosc) VALUES (%s,%s,%s,%s);",(id_badania,glowica,doppler,czestotliwosc))
+                conn.commit()
+    
+    print("Badanie zostało pomyślnie zarejestrowane.")
+
+def zmiana_danych_pacjenta(conn):
+    print("\nZMIANA DANYCH PACJENTA")
+    while True:
+        imie = input("Wprowadz imię pacjenta: ")
+        nazwisko = input("Wprowadz nazwisko pacjenta: ")
+        print("Potwierdź wybranie pacjenta: ")
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT * FROM public.pacjenci WHERE imie = %s AND nazwisko = %s;",(imie,nazwisko))
+                pacjent = cursor.fetchone()
+                if not pacjent:
+                    print("Błąd. Nie ma takiego pacjenta w bazie.")
+                    continue
+                print(f"Znaleziono: {pacjent[1]} {pacjent[2]}, PESEL: {pacjent[3]}")
+                stary_pesel = pacjent[3]
+            potw = input("tak / nie: ").strip().lower()
+            if potw=='tak':
+                break
+            elif potw=='nie':
+                dalej = input("Czy chcesz wybrać innego pacjenta (tak/nie): ")
+                if dalej=='tak':
+                    continue
+                elif dalej=='nie':
+                    print("Powrót do menu głównego.")
+                    return
+                else:
+                    print("Nieznana komenda. Powrót do menu głównego.")
+                    return
+            else:
+                print("Nieznana komenda. Powrót do początku.")
+                continue
+        except Exception as e:
+            print(f"Błąd podczas wyszukiwania pacjenta w bazie: {e}")
+            return
+
+    while True:   
+        print("""\nWłasności dostępne do zmiany:
+1. Imię
+2. Nazwisko
+3. Pesel
+4. Data urodzenia
+5. Płeć""")
+        wybor = input("\nWprowadź numer własności, którą chcesz zmienić: ")
+        match wybor:
+            case '1':
+                n_imie = input("Nowe imię: ")
+                with conn.cursor() as cursor:
+                    cursor.execute("UPDATE public.pacjenci SET imie = %s WHERE pesel = %s;",(n_imie,stary_pesel))
+                    conn.commit()
+                break
+            case '2':
+                n_nazwisko = input("Nowe nazwisko: ")
+                with conn.cursor() as cursor:
+                    cursor.execute("UPDATE public.pacjenci SET nazwisko = %s WHERE pesel = %s;",(n_nazwisko,stary_pesel))
+                    conn.commit()
+                break
+            case '3':
+                while True:
+                    n_pesel = input("PESEL: ").strip()
+                    if len(n_pesel)==11 and n_pesel.isdigit()==True:
+                        break
+                    else:
+                        print("Nieprawidłowy PESEL.")
+                if n_pesel[2]>='2':
+                    rok = '20'+n_pesel[0]+n_pesel[1]
+                    rok = int(rok)
+                    miesiac = int(n_pesel[2]+n_pesel[3]) - 20
+                    dzien = int(n_pesel[4]+n_pesel[5])
+                else:
+                    rok = int('19' + n_pesel[0] + n_pesel[1])                        
+                    miesiac = int(n_pesel[2]+n_pesel[3])
+                    dzien = int(n_pesel[4]+n_pesel[5])
+                n_data = date(rok,miesiac,dzien)
+                print("Zmiana PESELu wiąze się ze zmianą daty urodzenia. Nowa data urodzenia to {n_data}.")
+                with conn.cursor() as cursor:
+                    cursor.execute("UPDATE public.pacjenci SET pesel = %s, data_urodzenia = %s WHERE pesel = %s;",(n_pesel,n_data,stary_pesel))
+                    conn.commit()
+                break
+            case '4':
+                while True:
+                    try:
+                        n_dzien = int(input("Dzień: ").strip())
+                        n_mies = int(input("Miesiąc: ").strip())
+                        n_rok = int(input("Rok: ").strip())
+                        if n_dzien>31 or n_dzien<=0 or n_mies>12 or n_mies<=0 or n_rok>2026:
+                            print("Nieprawidłowa wartość.")
+                            continue
+                        n_data = date(n_rok,n_mies,n_dzien)
+                        
+                        if n_rok>=2000:
+                            pes23 = f"{n_mies + 20:02d}"
+                        else:
+                            pes23 = f"{n_mies:02d}"
+                        pes01 = str(n_rok)
+                        pes01 = pes01[2:]
+                        pes45 = f"{n_dzien:02d}"
+                        pes012345 = pes01 + pes23 + pes45
+                        pesel_konc = stary_pesel[6:]
+                        n_pesel = pes012345 + pesel_konc
+                        print("Zmiana daty urodzenia powoduje zmianę w numerze PESEL. Nowy PESEL: {n_pesel}")
+                        with conn.cursor() as cursor:
+                            cursor.execute("UPDATE public.pacjenci SET pesel = %s, data_urodzenia = %s WHERE pesel = %s;",(n_pesel,n_data,stary_pesel))
+                            conn.commit()
+                        stary_pesel = n_pesel
+                        break
+                    except:
+                        print("Wystąpił błąd.")
+                        continue
+                break
+            case '5':
+                while True:
+                    n_plec = input("Nowa płeć: (K/M) ").strip().upper()
+                    if n_plec=='K' or n_plec=='M':
+                        break
+                    elif n_plec=='F':
+                        n_plec='K'
+                        break
+                    else:
+                        print("Błąd wprowadzania.")
+                        continue
+                with conn.cursor() as cursor:
+                    cursor.execute("UPDATE public.pacjenci SET plec = %s WHERE pesel = %s;",(n_plec,stary_pesel))
+                    conn.commit()
+                break
+    print("Dane po zmianie: ")
+    with conn.cursor() as cursor:
+        cursor.execute("SELECT * FROM public.pacjenci WHERE pesel = %s;",(stary_pesel,))
+        zaktualizowany_pacjent = cursor.fetchone()
+        print(f"Pacjent po aktualizacji danych: \n{zaktualizowany_pacjent}")              
+
+def zmiana_danych_lekarza(conn):
+    print("\nZMIANA DANYCH PACJENTA")
+    while True:
+        imie = input("Imię lekarza: ").strip().lower()
+        nazwisko = input("Nazwisko lekarza: ").strip().lower()
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT * FROM public.lekarze WHERE imie = %s AND nazwisko = %s;",(imie,nazwisko))
+                lekarz = cursor.fetchone()
+                if not lekarz:
+                    print("Nie znaleziono lekarza w bazie.")
+                    continue
+                print(f"Znaleziono lekarza: {lekarz[1].capitalize()} {lekarz[2].capitalize()}, {lekarz[3]}")
+                potw = input("Potwierdź wybranie lekarza (tak/nie): ").strip().lower()
+                if potw=='nie' or potw=='n':
+                    dalej = input("Czy chcesz wyszukać innego lekarza (tak/nie)? ")
+                    if dalej=='tak' or dalej=='t':
+                        continue
+                    elif dalej=='nie' or dalej=='n':
+                        print("Powrót do menu głównego.")
+                        return
+                    else:
+                        print("Błąd wprowadzania. Nie znana komenda.\nPowró† do menu głównego.")
+                        return
+                elif potw=='tak' or potw=='t':
+                    print("Przejście do procedury zmiany danych.")
+                    lek_id = lekarz[0]
+                    break
+                else:
+                    print("Błąd wprowadzania. Powrót do menu głównego.")
+                    return
+        except Exception as e:
+            print(f"Błąd wyszukiwania: {e}")
+            break
+
+    while True:
+        print("""\nWłasności dostępne do zmiany:
+1. Imię
+2. Nazwisko
+3. Specjalizacja""")
+        wybor = input("Wprowadź numer własności, którą chcesz zmienić: ")
+        match wybor:
+            case '1':
+                n_imie = input("Nowe imię: ").strip().lower()
+                with conn.cursor() as cursor:
+                    cursor.execute("UPDATE public.lekarze SET imie = %s WHERE id_lekarza = %s;",(n_imie,lek_id))
+                    conn.commit()
+                    break
+            case '2':
+                n_nazwisko = input("Nowe nazwisko: ").strip().lower()
+                with conn.cursor() as cursor:
+                    cursor.execute("UPDATE public.lekarze SET nazwisko = %s WHERE id_lekarza = %s;",(n_nazwisko,lek_id))
+                    conn.commit()
+                    break
+            case '3':                    
+                n_spec = input("Nowa specjalizacja: ").strip().lower()
+                with conn.cursor() as cursor:
+                    cursor.execute("UPDATE public.lekarze SET specjalizacja = %s WHERE id_lekarza = %s;",(n_spec,lek_id))
+                    conn.commit()
+                    break
+            case _:
+                print("Błąd wprowadzania.")
+                continue
+    with conn.cursor() as cursor:
+        cursor.execute("SELECT * FROM public.lekarze WHERE id_lekarza = %s;",(lek_id,))
+        lekarz = cursor.fetchone()
+        print(f"Dane po zmianie: {lekarz[1].capitalize()} {lekarz[2].capitalize()}, {lekarz[3]}")
+
+def zmiana_danych_badania(conn):
+    while True:
+        id_pac,imie_pac,nazwisko_pac = wyszukanie_pacjenta(conn)
+        with conn.cursor() as cursor:
+            cursor.execute("""
+select b.id_badania,s.nazwa_badania,s.lokalizacja,b.data_badania,l.imie,l.nazwisko,b.opis
+from public.badania as b
+left join public.skierowania as s on b.id_skierowania = s.id_skierowania
+left join public.lekarze as l on b.id_radiologa = l.id_lekarza
+where s.id_pacjenta=%s;""",(id_pac,))
+            bad_pacjenta = cursor.fetchall()
+        if bad_pacjenta==None:
+            print("Nie odnaleziono badań dla wskazanego pacjenta.")
+            dalej = input("Czy chcesz wybrać innego pacjenta (tak/nie): ").strip().lower()
+            if dalej=='tak' or dalej=='t':
+                continue
+            else:
+                print("Powrót do menu głównego.")
+                return
+        break
+    print(f"Badania pacjenta {imie_pac.capitalize()} {nazwisko_pac.capitalize()}:")
+    while True:
+        ids=[]
+        for badanie in bad_pacjenta:
+            print(f"""
+ID badania: {badanie[0]}
+{badanie[1].upper()} {badanie[2]}
+Data wykonania badania: {str(badanie[3])}
+Radiolog: {badanie[4].capitalize()} {badanie[5].capitalize()}
+Opis: {badanie[6]}""")
+            ids.append(badanie[0])
+        try:
+            id_wybrane = int(input("Wprowadź ID badania, które chcesz zmienić: "))
+            if id_wybrane not in ids:
+                print("Brak badania o podanym ID dla wybranego pacjenta.")
+                continue
+            for badanie in bad_pacjenta:
+                if badanie[0]==id_wybrane:
+                    nazwa_badania = badanie[1]
+                    lokalizacja = badanie[2]
+                    data = badanie[3]
+                    imie_r = badanie[4]
+                    nazwisko_r = badanie[5]
+                    opis = badanie[6]
+                    break
+            break
+        except:
+            print("Błąd wprowadzania.")
+            continue
+    print("""Własności badania dostępne do zmiany: 
+1. Data wykonania badania
+2. Lekarz opisujący
+3. Opis""")
+    match nazwa_badania:
+        case 'tk':
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT * FROM public.tk WHERE id_badania=%s;",(id_wybrane,))
+                specjalne = cursor.fetchall()
+                print(f"""4. Dawka promieniowania ({specjalne[0]})
+5. Kontrast ({specjalne[1]})
+6. Tryb ({specjalne[2].upper()})""")
+        case 'rtg':
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT * FROM public.rtg WHERE id_badania=%s;",(id_wybrane,))
+                specjalne = cursor.fetchall()
+            print(f"""4. Dawka promieniowania ({specjalne[0]})
+5. Projekcja ({specjalne[1].upper()})
+6. Pozycja ({specjalne[2]})""")
+        case 'mri':
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT * FROM public.mri WHERE id_badania=%s;",(id_wybrane,))
+                specjalne = cursor.fetchall()
+            print(f"""4. Pole magnetyczne aparatu ({specjalne[0]}T)
+5. Kontrast ({specjalne[1]})
+6. Protokół ({specjalne[2]})""")
+        case 'usg':
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT * FROM public.usg WHERE id_badania=%s;",(id_wybrane,))
+                specjalne = cursor.fetchall()
+            print(f"""4. Głowica ({specjalne[0]})
+5. Doppler ({specjalne[1]})
+6. Częstotliwość ({specjalne[2]} MHz)""")
+    while True:
+        wybor = input("Wprowadź numer własności, którą chcesz zmienić: ").strip()
+        match wybor:
+            case '1':
+                while True:
+                    try:
+                        dzien = int(input("Dzień: "))
+                        miesiac = int(input("Miesiąc (liczba): "))
+                        rok = int(input("Rok: "))
+                        data_nowa = date(rok,miesiac,dzien)
+                        break
+                    except:
+                        print("Błąd wprowadzania.")
+                        continue
+                with conn.cursor() as cursor:
+                    cursor.execute("UPDATE public.badania SET data_badania=%s WHERE id_badania=%s;"),(data_nowa,id_wybrane)
+                    conn.commit()
+                break
+            case '2':
+                with conn.cursor() as cursor:
+                    cursor.execute("SELECT l.id_lekarza,l.imie,l.nazwisko FROM public.lekarze as l WHERE specjalizacja=%s;",('radiolog',))
+                    radiolodzy = cursor.fetchall()
+                id_radiologow = []
+                print("\nLekarze radiolodzy:")
+                for lek in radiolodzy:
+                    print(f"ID {lek[0]}: {lek[1].capitalize()} {lek[2].capitalize()}")
+                    id_radiologow.append(lek[0])
+                while True:
+                    wybor = input("Wprowadź ID wybrranego radiologa: ").strip()
+                    if wybor not in id_radiologow:
+                        print("Nie odnaleziono radiologa o podanym ID.")
+                        continue
+                    break
+                for lek in radiolodzy:
+                    if lek[0]==wybor:
+                        with conn.cursor() as cursor:
+                            cursor.execute("UPDATE public.badania SET id_radiologa=%s WHERE id_badania=%s;",(lek[0],id_wybrane))
+                            conn.commit()
+                        break
+                break
+            case '3':
+                nowy_opis = input("Nowy opis: ").lower()
+                while True:
+                    czy_dopisac = input("Czy nowy opis dopisać do istniejącego (tak/nie - nie dopisanie spowoduje zastąpienie aktualnego opisu): ")
+                    if czy_dopisac=='tak' or czy_dopisac=='t':
+                        with conn.cursor() as cursor:
+                            cursor.execute("SELECT opis FROM public.badania WHERE id_badania=%s;",(id_wybrane,))
+                            stary_opis = cursor.fetchone()
+                        opis = stary_opis + " | " + nowy_opis
+                        with conn.cursor() as cursor:
+                            cursor.execute("UPDATE badania SET opis=%s WHERE id_badania=%s;",(opis,id_wybrane))
+                            conn.commit()
+                        break
+                    elif czy_dopisac=='nie' or czy_dopisac=='n':
+                        with conn.cursor() as cursor:
+                            cursor.execute("UPDATE badania SET opis=%s WHERE id_badania=%s;",(nowy_opis,id_wybrane))
+                            conn.commit()
+                        break
+                    else:
+                        print("Błąd wprowadzania. Nieznana komenda.")
+                        continue
+                break
+            case '4':
+                match nazwa_badania:
+                    case 'tk':
+                        while True:
+                            try:
+                                nowa_dawka = float(input("Proszę wprowadzić nową wartość dawki promieniowania: ").strip())
+                                with conn.cursor() as cursor:
+                                    cursor.execute("UPDATE public.tk SET dawka_prom=%s WHERE id_badania=%s;",(nowa_dawka,id_wybrane))
+                                    conn.commit()
+                                break
+                            except:
+                                print("Błąd wprowadzania.")
+                                continue
+                        break
+                    case 'rtg':
+                        while True:
+                            try:
+                                nowa_dawka = float(input("Proszę wprowadzić nową wartość dawki promieniowania: ").strip())
+                                with conn.cursor() as cursor:
+                                    cursor.execute("UPDATE public.rtg SET dawka_prom=%s WHERE id_badania=%s;",(nowa_dawka,id_wybrane))
+                                    conn.commit()
+                                break
+                            except:
+                                print("Błąd wprowadzania.")
+                                continue
+                        break
+                    case 'mri':
+                        while True:
+                            try:
+                                nowe_pole = float(input("Prose wprowadzić nową wartość pola magnetycznego aparatu: ").strip())
+                                with conn.cursor() as cursor:
+                                    cursor.execute("UPDATE public.mri SET pole_magn=%s WHERE id_badania=%s;",(nowe_pole,id_wybrane))
+                                    conn.commit()
+                                break
+                            except:
+                                print("Błąd wprowadzania.")
+                                continue
+                        break
+                    case 'usg':
+                        nowa_glowica = input("Nowa głowica: ").strip().lower()
+                        with conn.cursor() as cursor:
+                            cursor.execute("UPDATE public.usg SET glowica=%s WHERE id_badania=%s;",(nowa_glowica,id_wybrane))
+                            conn.commit()
+                        break
+            case '5': 
+                match nazwa_badania:
+                    case 'tk':
+                        while True:
+                            kontrast = input("Czy podczas badania podany był środek kontrastowy (tak/nie): ").strip().lower()
+                            if kontrast=='tak' or kontrast=='t':
+                                kontrast=True
+                                break
+                            elif kontrast=='nie' or kontrast=='n':
+                                kontrast=False
+                                break
+                            else:
+                                print("Błąd wprowadzania.")
+                                continue
+                        with conn.cursor() as cursor:
+                            cursor.execute("UPDATE public.tk SET kontrast=%s WHERE id_badania=%s;",(kontrast,id_wybrane))
+                            conn.commit()
+                        break
+                        
+                    case 'rtg':
+                        projekcja = input("Nowa projekcja: ").lower().strip()
+                        with conn.cursor as cursor:
+                            cursor.execute("UPDATE public.rtg SET projekcja=%s WHERE id_badania=%s;",(projekcja,id_wybrane))
+                            conn.commit()
+                        break
+                    case 'mri':
+                        while True:
+                            kontrast = input("Czy podczas badania podany był środek kontrastowy (tak/nie): ").strip().lower()
+                            if kontrast=='tak' or kontrast=='t':
+                                kontrast=True
+                                break
+                            elif kontrast=='nie' or kontrast=='n':
+                                kontrast=False
+                                break
+                            else:
+                                print("Błąd wprowadzania.")
+                                continue
+                        with conn.cursor() as cursor:
+                            cursor.execute("UPDATE public.mri SET kontrast=%s WHERE id_badania=%s;",(kontrast,id_wybrane))
+                            conn.commit()
+                        break
+                    case 'usg':
+                        while True:
+                            doppler = input("Czy podczas badania badane były przepływy (tak/nie): ").strip().lower()
+                            if kontrast=='tak' or kontrast=='t':
+                                kontrast=True
+                                break
+                            elif kontrast=='nie' or kontrast=='n':
+                                kontrast=False
+                                break
+                            else:
+                                print("Błąd wprowadzania.")
+                                continue
+                        with conn.cursor() as cursor:
+                            cursor.execute("UPDATE public.usg SET doppler=%s WHERE id_badania=%s;",(doppler,id_wybrane))
+                            conn.commit()
+                        break
+            case '6': 
+                match nazwa_badania:
+                    case 'tk':
+                        tryb = input("Tryb badania (SECT/DECT): ").strip().lower()
+                        with conn.cursor() as cursor:
+                            cursor.execute("UPDATE public.tk SET tryb=%s WHERE id_badania=%s;",(tryb,id_wybrane))
+                            conn.commit()
+                        break
+                    case 'rtg':
+                        pozycja = input("Pozycja badania: ").lower()
+                        with conn.cursor() as cursor:
+                            cursor.execute("UPDATE public.rtg SET pozycja=%s WHERE id_badania=%s;",(pozycja,id_wybrane))
+                            conn.commit()
+                        break
+                    case 'mri':
+                        protokol = input("Protokół badania: ").lower()
+                        with conn.cursor() as cursor:
+                            cursor.execute("UPDATE public.mri SET protokol=%s WHERE id_badania=%s;",(protokol,id_wybrane))
+                            conn.commit()
+                        break
+                    case 'usg':
+                        while True:
+                            try:
+                                czestotliwosc = float(input("Częstotliwość obrazowania: ").strip())
+                                break
+                            except:
+                                print("Błąd wprowadzania.")
+                                continue
+                        with conn.cursor() as cursor:
+                            cursor.execute("UPDATE public.usg SET czestotliwosc=%s WHERE id_badania=%s;",(czestotliwosc,id_wybrane))
+                            cursor.commit()
+                        break
+            case _:
+                print("Błąd wprowadzania.")
+                continue  
+    print("Pomyślnie zmieniono dane.")
+    return  
+
+def raport_dzienny(conn):
+    while True:
+        try:
+            dzien = int(input("Dzień: "))
+            miesiac = int(input("Miesiąc (liczba): "))
+            rok = int(input("Rok: "))
+            data = date(rok,miesiac,dzien)
+            break
+        except:
+            print("Błąd wprowadzania.")
+            continue
+    with conn.cursor() as cursor:
+        cursor.execute("""SELECT COUNT(b.id_badania) AS Badania
+FROM public.badania AS b
+WHERE b.data_badania=%s;""",(data,))
+        liczba_badan = cursor.fetchone()
+        cursor.execute("""SELECT COUNT(CASE WHEN s.nazwa_badania='tk' THEN 1 END) AS TK,
+COUNT(CASE WHEN s.nazwa_badania='rtg' THEN 1 END) AS RTG,
+COUNT(CASE WHEN s.nazwa_badania='mri' THEN 1 END) AS MRI,
+COUNT(CASE WHEN s.nazwa_badania='usg' THEN 1 END) AS USG
+FROM public.skierowania AS s
+LEFT JOIN public.badania AS b ON s.id_skierowania = b.id_skierowania 
+WHERE b.data_badania=%s;""",(data,))
+        badania_statystyki = cursor.fetchall()
+        cursor.execute("""SELECT COUNT(CASE WHEN p.plec='K' THEN 1 END) AS Kobiety,
+COUNT(CASE WHEN p.plec='M' THEN 1 END) AS Mezczyzni
+FROM public.pacjenci AS p
+LEFT JOIN public.skierowania AS s ON p.id_pacjenta=s.id_pacjenta
+LEFT JOIN public.badania AS b ON s.id_skierowania=b.id_skierowania
+WHERE b.data_badania=%s;""",(data,))
+        plec_statystyki = cursor.fetchall()
+    
+    print(f"""STATYSTYKI Z DNIA - {data}
+Liczba wykonanaych badań: {liczba_badan}
+    TK: {badania_statystyki[0]}
+    RTG: {badania_statystyki[1]}
+    MRI: {badania_statystyki[2]}
+    USG: {badania_statystyki[3]}
+
+Przebadano {plec_statystyki[0]} kobiet i {plec_statystyki[1]} męzczyzn.""")
+    
+    plt.bar(['TK','RTG','MRI','USG'],badania_statystyki,color=["#14583c", "#2bae59", "#38ea38", "#84f982"])
+    plt.title(f"Badania wykonane {data}")
+    plt.xlabel("Typ badania")
+    plt.ylabel("Liczba wykonanych")
+    plt.show()
+
+def rozlaczenie(conn):
+    conn.close()
+    print("Pomyślnie rozłączono z bazą.")
+
+
+conn = polaczenie()
+
+print("\n     MINI-RIS")
+while True:
+    print("""
+Dostępne funkcje:
+1. Dodanie nowego pacjenta do bazy
+2. Dodanie nowego lekarza do bazy
+3. Dodanie skierowania
+4. Dodanie badania
+5. Zmiana danych pacjenta
+6. Zmiana danych lekarza
+7. Zmiana danych badania
+8. Wyszukanie skierowania
+9. Wyszukiwanie badań i skierowań pacjenta
+10. Raport dzienny
+11. Opuszczenie bazy """)
+    wybor = input("Wprowadz numer wybranej funkcji: ")
+    match wybor:
+        case '1':
+            dodanie_pacjenta(conn)
+        case '2':
+            dodanie_lekarza(conn)
+        case '3':
+            dodanie_skierowania(conn)
+        case '4':
+            dodanie_badania(conn)
+        case '5':
+            zmiana_danych_pacjenta(conn)
+        case '6':
+            zmiana_danych_lekarza(conn)
+        case '7':
+            zmiana_danych_badania(conn)
+        case '8':
+            wyszukanie_skierowania(conn)
+        case '9':
+            wyszukanie_pacjenta_zaawansowane(conn)
+        case '10':
+            raport_dzienny(conn)
+        case '11':
+            rozlaczenie(conn)
+            break
+        case _:
+            print("Błąd wyboru.")
+    
