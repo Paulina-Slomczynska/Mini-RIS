@@ -1,8 +1,10 @@
-# to jest uzupełniający skrypt do main, ktory ma generować raport stanu bazy czy np nie ma blank records albo dubli etc
 import psycopg2
 from dotenv import load_dotenv
 import os
-
+from datetime import date 
+import pandas as pd
+errors_saved = []
+# err_dict = {'error type': , 'table': , 'id name': , 'id number': }
 def connection():
     load_dotenv()
 
@@ -19,14 +21,13 @@ def connection():
                     with conn.cursor() as cursor:
                         cursor.execute('SELECT VERSION();')
                         db_version = cursor.fetchone()
-                        print(f'Połączono z bazą wersja {db_version}.')
+                        print(f'Connected with the database {db_version}.')
                         return conn
         
     except Exception as e:
-        print(f'Wystapił błąd podczas łączenia z bazą danych: {e}.')
+        print(f'There was an error while connecting: {e}.')
 
 def blank_records_check(conn):
-    print("\nBLANK RECORD CHECK UP")
     # structured: ((tab1_name,(col1,col2..)),(tab2,(col1,col2..)),..)
     tables = (('public.pacjenci',('id_pacjenta','imie','nazwisko','pesel','data_urodzenia','plec')),
             ('public.lekarze',('id_lekarza','imie','nazwisko','specjalizacja')),
@@ -37,58 +38,103 @@ def blank_records_check(conn):
             ('public.mri',('id_badania','pole_magn','kontrast','protokol')),
             ('public.usg',('id_badania','glowica','doppler','czestotliwosc')))
     for tab in tables:
-        corrupted=[]
-        print(f"\nTable {tab[0]}:")
         for col in tab[1][1:]:
             with conn.cursor() as cursor:
                 cursor.execute(f"SELECT {tab[1][0]} FROM {tab[0]} WHERE {col} IS NULL;",)
-                catch = cursor.fetchone()
-                if catch==None:
-                    continue
-                else:
-                    corrupted.append(catch)
-        if corrupted==[]:
-            print(f"No blank spots in table {tab[0]}.")
-        else:
-            print(f"Found blank spots in table {tab[0]}. IDs:")
-            for el in corrupted:
-                print(el)
-
+                catch = cursor.fetchall()
+                if catch:
+                    for row in catch:
+                        error = {'error type': f'blank spot in column {col}','table': tab[0], 'id name':tab[1][0],'id number': row[0]}
+                        errors_saved.append(error)
+                    
 def duplicates_check(conn):
-    print("\nDUPLICATES CHECK UP")
-# patients duplicates:
-    dupl_pac=[]
-    with conn.cursor() as cursor:
-        cursor.execute(f"SELECT pesel, COUNT(*) FROM public.pacjenci GROUP BY pesel HAVING COUNT(*)>1;",)
-        dupl_pac = cursor.fetchall()
-    if dupl_pac==[]:
-        print("No duplicates in table pacjenci.")
-    else:
-        for pac in dupl_pac:
-            print(f"Duplicated patients - {pac[1]} - for PESEL number: {pac[0]}.")
-
-# referral duplicates:
-    dupl_ref = []
-    with conn.cursor() as cursor:
-        cursor.execute("""SELECT s.id_pacjenta, COUNT(*) 
-FROM skierowania as s 
-LEFT JOIN pacjenci AS p ON s.id_pacjenta=p.id_pacjenta 
-GROUP BY s.id_pacjenta 
-HAVING COUNT(*)>1;""",)
-        dupl_ref= cursor.fetchall()
-    if dupl_ref==[]:
-        print("No duplicates in table skierowania.")
-    else:
-        for pac in dupl_ref:
+    selected_values = ('pesel','imie, nazwisko, specjalizacja','id_pacjenta, id_lekarza, data_skierowania, nazwa_badania, lokalizacja','id_skierowania, data_badania, id_radiologa','id_badania,dawka_prom,kontrast,tryb','id_badania, dawka_prom, projekcja, pozycja','id_badania, pole_magn, kontrast, protokol', 'id_badania, glowica, doppler, czestotliwosc')
+    tables = ('public.pacjenci','public.lekarze','public.skierowania','public.badania','public.tk','public.rtg','public.mri','public.usg')
+    id_names = ('pesel','imie nazwisko','id_pacjenta','id_skierowania','id_badania','id_badania','id_badania','id_badania')
+    for select, tab,idname in zip(selected_values,tables,id_names):
+        with conn.cursor() as cursor:
+            cursor.execute(f"SELECT {select}, COUNT(*) FROM {tab} GROUP BY {select} HAVING COUNT(*)>1;",)
+            dupls = cursor.fetchall()
+        if tab=='public.badania':
+            more_than_one=[]
             with conn.cursor() as cursor:
-                cursor.execute("SELECT * FROM skierowania WHERE id_pacjenta=%s;",(pac[0]))
-                ref_details = cursor.fetchall()
-# jestem na sprawdzaniu czy nie ma duplikatów skierowań. dokładnie to wyciągnęłam ile jaki pacjent ma skierowń jeśli więcej niz jedno (bo wtedy jest zasadnosc sprwadzania duplikatow) i teraz bede sprawdzac czy skierowania podpiete do konkretnego pacjenta nie są zdublowane
-            
-         
-conn = None
+                cursor.execute("SELECT id_skierowania, COUNT(*) FROM public.badania GROUP BY id_skierowania HAVING COUNT(*)>1;",)
+                more_than_one = cursor.fetchall()
+            if more_than_one!=[]:
+                for d in more_than_one:
+                    error = {'error type':'more than 1 exam for a referral', 'table':tab, 'id name':'id_skierowania','id number': d[0]}
+                    errors_saved.append(error)
+        if dupls!=[]:
+            for rec in dupls:
+                error = {'error type':'duplicate', 'table':tab, 'id name':idname,'id number':rec[0]}
+                errors_saved.append(error)
+    
+def data_range_check(conn):
+# this function checks if certain types of data are within the logical range
+    # dates:
+    dzis = date.today()
+    err_ids = ('id_pacjenta','id_skierowania','id_badania')
+    tables = ('public.pacjenci','public.skierowania','public.badania')
+    select_values = ('data_urodzenia','data_skierowania','data_badania')
+    for id,tab,select in zip(err_ids,tables,select_values):
+        with conn.cursor() as cursor:
+            cursor.execute(f"SELECT {select}, {id} FROM {tab} WHERE {select}>%s;",(dzis,))
+            fetched = cursor.fetchall()
+            err_exp = "Date from the future"
+            for fetch in fetched:
+                error = {'error type':err_exp, 'table':tab, 'id name': id,'id number':fetch[1]}
+                errors_saved.append(error)
+        if tab=='public.skierowania':
+            with conn.cursor() as cursor:
+                cursor.execute(f"SELECT {tab}.{select}, {tab}.{id} FROM {tab} LEFT JOIN public.pacjenci ON {tab}.id_pacjenta=public.pacjenci.id_pacjenta WHERE {tab}.{select}<public.pacjenci.data_urodzenia;")
+                errs = cursor.fetchall()
+            for err in errs:
+                error={'error type':'referral date before birth date','table':tab, 'id name':id,'id number':err[1]}
+                errors_saved.append(error)
+        elif tab=='public.badania':
+            with conn.cursor() as cursor:
+                cursor.execute(f"SELECT {tab}.{select}, {tab}.{id} FROM {tab} LEFT JOIN public.skierowania ON {tab}.id_skierowania=public.skierowania.id_skierowania WHERE {tab}.{select}<public.skierowania.data_skierowania;")
+                errs = cursor.fetchall()
+            for err in errs:
+                error={'error type':'exam date before refferal date','table':tab, 'id name':id,'id number':err[1]}
+                errors_saved.append(error)
 
+    # magnetic field and frequency and radiation dose:
+    selected = ('pole_magn','czestotliwosc','dawka_prom','dawka_prom')
+    tables = ('public.mri','public.usg','public.tk','public.rtg')
+    conditions = ('pole_magn NOT IN (1.5,3,7)','czestotliwosc NOT BETWEEN 0 AND 20','dawka_prom <0','dawka_prom <0')
+    for select,tab,cond in zip(selected,tables,conditions):
+        errors = []
+        with conn.cursor() as cursor:
+            cursor.execute(f"SELECT id_badania, {select} FROM {tab} WHERE {cond};",)
+            errors = cursor.fetchall()
+        for err in errors:
+            match tab:
+                case 'public.mri':
+                    err_type = 'magntic field value out of range'
+                case 'public.usg':
+                    err_type = 'frequency value out of range'
+                case 'public.tk' | 'public.rtg':
+                    err_type = 'radiation dose less than 0'
+            error = {'error type':err_type,'table':tab, 'id name':'id_badania','id number':err[0]}
+            errors_saved.append(error)
+
+def closeanddisconnection(conn):
+    conn.close()
+    print("Successfully disconnected with the database.")
+    if errors_saved==[]:
+        print("Clean database. Report generating stopped.")
+    df = pd.DataFrame(errors_saved)
+    df.to_csv('/Users/paulinaslomczynska/Downloads/mini_ris_raport.csv',index=False)
+
+conn = None
 conn = connection()
 if conn==None:
     exit
+
 blank_records_check(conn)
+print("")
+duplicates_check(conn)
+print("")
+data_range_check(conn)
+closeanddisconnection(conn)
