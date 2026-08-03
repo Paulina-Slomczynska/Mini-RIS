@@ -2,7 +2,11 @@ import psycopg2
 import os
 from dotenv import load_dotenv
 from datetime import date
+<<<<<<< HEAD
 import matplotlib.pyplot as plt
+=======
+import matplotlib as plt
+>>>>>>> eeb6dffff44873e52d18d5a7a97ae91c7a60eb8a
 
 def polaczenie():
     load_dotenv()
@@ -896,14 +900,22 @@ COUNT(CASE WHEN s.nazwa_badania='usg' THEN 1 END) AS USG
 FROM public.skierowania AS s
 LEFT JOIN public.badania AS b ON s.id_skierowania = b.id_skierowania 
 WHERE b.data_badania=%s;""",(data,))
+<<<<<<< HEAD
         badania_statystyki = cursor.fetchall()
+=======
+        badania_statystyki = cursor.fetchone()
+>>>>>>> eeb6dffff44873e52d18d5a7a97ae91c7a60eb8a
         cursor.execute("""SELECT COUNT(CASE WHEN p.plec='K' THEN 1 END) AS Kobiety,
 COUNT(CASE WHEN p.plec='M' THEN 1 END) AS Mezczyzni
 FROM public.pacjenci AS p
 LEFT JOIN public.skierowania AS s ON p.id_pacjenta=s.id_pacjenta
 LEFT JOIN public.badania AS b ON s.id_skierowania=b.id_skierowania
 WHERE b.data_badania=%s;""",(data,))
+<<<<<<< HEAD
         plec_statystyki = cursor.fetchall()
+=======
+        plec_statystyki = cursor.fetch()
+>>>>>>> eeb6dffff44873e52d18d5a7a97ae91c7a60eb8a
     
     print(f"""STATYSTYKI Z DNIA - {data}
 Liczba wykonanaych badań: {liczba_badan}
@@ -969,4 +981,8 @@ Dostępne funkcje:
             break
         case _:
             print("Błąd wyboru.")
+<<<<<<< HEAD
     
+=======
+    
+>>>>>>> eeb6dffff44873e52d18d5a7a97ae91c7a60eb8a

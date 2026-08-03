@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 import psycopg2
 from dotenv import load_dotenv
 import os
@@ -5,6 +6,13 @@ from datetime import date
 import pandas as pd
 errors_saved = []
 # err_dict = {'error type': , 'table': , 'id name': , 'id number': }
+=======
+# to jest uzupełniający skrypt do main, ktory ma generować raport stanu bazy czy np nie ma blank records albo dubli etc
+import psycopg2
+from dotenv import load_dotenv
+import os
+
+>>>>>>> eeb6dffff44873e52d18d5a7a97ae91c7a60eb8a
 def connection():
     load_dotenv()
 
@@ -21,6 +29,7 @@ def connection():
                     with conn.cursor() as cursor:
                         cursor.execute('SELECT VERSION();')
                         db_version = cursor.fetchone()
+<<<<<<< HEAD
                         print(f'Connected with the database {db_version}.')
                         return conn
         
@@ -28,6 +37,16 @@ def connection():
         print(f'There was an error while connecting: {e}.')
 
 def blank_records_check(conn):
+=======
+                        print(f'Połączono z bazą wersja {db_version}.')
+                        return conn
+        
+    except Exception as e:
+        print(f'Wystapił błąd podczas łączenia z bazą danych: {e}.')
+
+def blank_records_check(conn):
+    print("\nBLANK RECORD CHECK UP")
+>>>>>>> eeb6dffff44873e52d18d5a7a97ae91c7a60eb8a
     # structured: ((tab1_name,(col1,col2..)),(tab2,(col1,col2..)),..)
     tables = (('public.pacjenci',('id_pacjenta','imie','nazwisko','pesel','data_urodzenia','plec')),
             ('public.lekarze',('id_lekarza','imie','nazwisko','specjalizacja')),
@@ -38,6 +57,7 @@ def blank_records_check(conn):
             ('public.mri',('id_badania','pole_magn','kontrast','protokol')),
             ('public.usg',('id_badania','glowica','doppler','czestotliwosc')))
     for tab in tables:
+<<<<<<< HEAD
         for col in tab[1][1:]:
             with conn.cursor() as cursor:
                 cursor.execute(f"SELECT {tab[1][0]} FROM {tab[0]} WHERE {col} IS NULL;",)
@@ -138,3 +158,60 @@ duplicates_check(conn)
 print("")
 data_range_check(conn)
 closeanddisconnection(conn)
+=======
+        corrupted=[]
+        print(f"\nTable {tab[0]}:")
+        for col in tab[1][1:]:
+            with conn.cursor() as cursor:
+                cursor.execute(f"SELECT {tab[1][0]} FROM {tab[0]} WHERE {col} IS NULL;",)
+                catch = cursor.fetchone()
+                if catch==None:
+                    continue
+                else:
+                    corrupted.append(catch)
+        if corrupted==[]:
+            print(f"No blank spots in table {tab[0]}.")
+        else:
+            print(f"Found blank spots in table {tab[0]}. IDs:")
+            for el in corrupted:
+                print(el)
+
+def duplicates_check(conn):
+    print("\nDUPLICATES CHECK UP")
+# patients duplicates:
+    dupl_pac=[]
+    with conn.cursor() as cursor:
+        cursor.execute(f"SELECT pesel, COUNT(*) FROM public.pacjenci GROUP BY pesel HAVING COUNT(*)>1;",)
+        dupl_pac = cursor.fetchall()
+    if dupl_pac==[]:
+        print("No duplicates in table pacjenci.")
+    else:
+        for pac in dupl_pac:
+            print(f"Duplicated patients - {pac[1]} - for PESEL number: {pac[0]}.")
+
+# referral duplicates:
+    dupl_ref = []
+    with conn.cursor() as cursor:
+        cursor.execute("""SELECT s.id_pacjenta, COUNT(*) 
+FROM skierowania as s 
+LEFT JOIN pacjenci AS p ON s.id_pacjenta=p.id_pacjenta 
+GROUP BY s.id_pacjenta 
+HAVING COUNT(*)>1;""",)
+        dupl_ref= cursor.fetchall()
+    if dupl_ref==[]:
+        print("No duplicates in table skierowania.")
+    else:
+        for pac in dupl_ref:
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT * FROM skierowania WHERE id_pacjenta=%s;",(pac[0]))
+                ref_details = cursor.fetchall()
+# jestem na sprawdzaniu czy nie ma duplikatów skierowań. dokładnie to wyciągnęłam ile jaki pacjent ma skierowń jeśli więcej niz jedno (bo wtedy jest zasadnosc sprwadzania duplikatow) i teraz bede sprawdzac czy skierowania podpiete do konkretnego pacjenta nie są zdublowane
+            
+         
+conn = None
+
+conn = connection()
+if conn==None:
+    exit
+blank_records_check(conn)
+>>>>>>> eeb6dffff44873e52d18d5a7a97ae91c7a60eb8a
